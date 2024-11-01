@@ -32,7 +32,11 @@ import (
 	cmttime "github.com/cometbft/cometbft/types/time"
 )
 
-var msgQueueSize = 1000
+var (
+	errPubKeyIsNotSet = errors.New("pubkey is not set. Look for \"Can't get private validator pubkey\" errors")
+	msgQueueSize      = 1000
+	taskQueueSize     = 128
+)
 
 // msgs from the reactor which may update the state
 type msgInfo struct {
@@ -150,6 +154,7 @@ func NewState(
 	evpool evidencePool,
 	options ...StateOption,
 ) *State {
+	blockExec.SetTaskRunner(spawnTaskRunner(taskQueueSize))
 	cs := &State{
 		config:           config,
 		blockExec:        blockExec,
@@ -1220,7 +1225,7 @@ func (cs *State) enterPropose(height int64, round int32) {
 	if cs.privValidatorPubKey == nil {
 		// If this node is a validator & proposer in the current round, it will
 		// miss the opportunity to create a block.
-		logger.Error("propose step; empty priv validator public key", "err", ErrPubKeyIsNotSet)
+		logger.Error("propose step; empty priv validator public key", "err", errPubKeyIsNotSet)
 		return
 	}
 
@@ -2694,4 +2699,17 @@ func repairWalFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+// spawnTaskRunner spawn a single goroutine to run tasks in FIFO order.
+func spawnTaskRunner(buf int) func(func()) {
+	taskCh := make(chan func(), buf)
+	go func() {
+		for f := range taskCh {
+			f()
+		}
+	}()
+	return func(f func()) {
+		taskCh <- f
+	}
 }

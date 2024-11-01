@@ -50,6 +50,7 @@ type BlockExecutor struct {
 
 	// blockTimeTolerance is the maximum allowed difference between proposed block time and wall clock.
 	blockTimeTolerance time.Duration
+	asyncRunner        func(func())
 }
 
 type BlockExecutorOption func(executor *BlockExecutor)
@@ -63,6 +64,12 @@ func BlockExecutorWithMetrics(metrics *Metrics) BlockExecutorOption {
 func BlockExecutorWithBlockTimeTolerance(d time.Duration) BlockExecutorOption {
 	return func(blockExec *BlockExecutor) {
 		blockExec.blockTimeTolerance = d
+	}
+}
+
+func BlockExecutorWithAsyncRunner(runner func(func())) BlockExecutorOption {
+	return func(blockExec *BlockExecutor) {
+		blockExec.asyncRunner = runner
 	}
 }
 
@@ -103,6 +110,10 @@ func (blockExec *BlockExecutor) Store() Store {
 // If not called, it defaults to types.NopEventBus.
 func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) {
 	blockExec.eventBus = eventBus
+}
+
+func (blockExec *BlockExecutor) SetTaskRunner(runner func(func())) {
+	blockExec.asyncRunner = runner
 }
 
 // CreateProposalBlock calls state.MakeBlock with evidence from the evpool
@@ -365,7 +376,15 @@ func (blockExec *BlockExecutor) applyBlock(state State, blockID types.BlockID, b
 	if _, ok := blockExec.eventBus.(types.NopEventBus); !ok {
 		// Events are fired after everything else.
 		// NOTE: if we crash between Commit and Save, events wont be fired during replay
-		go fireEvents(blockExec.logger, blockExec.eventBus, block, blockID, abciResponse, validatorUpdates)
+		task := func() {
+			fireEvents(blockExec.logger, blockExec.eventBus, block, blockID, abciResponse, validatorUpdates)
+		}
+
+		if blockExec.asyncRunner != nil {
+			blockExec.asyncRunner(task)
+		} else {
+			task()
+		}
 	}
 
 	return state, nil
