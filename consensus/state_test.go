@@ -2623,7 +2623,6 @@ func TestSpawnTaskRunner(t *testing.T) {
 		defer stop()
 
 		for i := 0; i < 5; i++ {
-			i := i // capture loop variable by value
 			enqueue(func() { results = append(results, i) })
 		}
 		stop()
